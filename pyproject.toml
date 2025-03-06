@@ -1,0 +1,11 @@
+[project]
+name = "sn64-tools"
+version = "0.1"
+description = "Bittensor subnet-64 (Chutes) tools."
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 158
