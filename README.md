@@ -52,6 +52,8 @@ python src/delete-remote-gpu.py
 It will display all your miner GPUs known by the Chutes validator in a rich table.
 And then it will prompt you for GPU index numbers or IPs to delete from the validator.
 
+![Screenshot of delete-remote-gpu.py](src/screenshot-delete-remote-gpu.png)
+
 ## Why?
 Many miners don't know how to delete their orphan GPUs from the remote validator DB, so they need to ping the subnet owner multiple times per day so that he can do it himself.
 
