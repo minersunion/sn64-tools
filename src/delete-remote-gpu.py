@@ -7,7 +7,6 @@ import time
 from typing import Any, Dict, TypedDict
 
 import aiohttp
-from bittensor_wallet.wallet import Wallet
 from rich import box
 from rich.console import Console
 from rich.table import Table
