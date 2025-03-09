@@ -51,7 +51,7 @@ class RemoteInventoryItem(TypedDict):
     inst_verified_at: str
 
 
-def scorch_remote(miner_wallet: Wallet, auto_delete: int):  # type: ignore
+def scorch_remote(miner_wallet: Wallet, auto_delete: bool):  # type: ignore
     remote_inventory: list[RemoteInventoryItem] = fetch_remote_inventory(miner_wallet)
     hotkey_path = get_miner_wallet_hotkey_path(miner_wallet)
     validator_api = CHUTES_API
