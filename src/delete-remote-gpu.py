@@ -117,7 +117,7 @@ def fetch_local_and_remote_inventories(hotkey_path: str, miner_api_url: str):
     return asyncio.run(_fetch_data_async(hotkey_path, miner_api_url))
 
 
-def scorch_remote(hotkey_path: str):
+def scorch_remote(hotkey_path: str, miner_api_url: str):
     remote_inventory, local_inventory = fetch_local_and_remote_inventories(hotkey_path, miner_api_url)
 
     validator_api = CHUTES_API
@@ -352,4 +352,4 @@ if __name__ == "__main__":
     if not hotkey_path or not miner_api_url:
         raise ValueError("Invalid CLI arguments")
 
-    scorch_remote(hotkey_path)
+    scorch_remote(hotkey_path, miner_api_url)
