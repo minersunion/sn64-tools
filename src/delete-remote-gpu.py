@@ -345,14 +345,14 @@ def display_gpu_table(remote_inventory: list[RemoteInventoryItem], miner_wallet:
 
 def get_cli_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument('-a', '--auto', help="Delete gpu_id automatically.Default: False.", default=0)
+    parser.add_argument('-a', '--auto-delete', action='store_true', help="Delete gpu_id automatically.")
     args = parser.parse_args()
     return args
 
 
 if __name__ == "__main__":
     args: argparse.Namespace = get_cli_args()
-    auto_delete: int = args.auto
+    auto_delete: bool = args.auto_delete
 
     print("☠️ Scorch Remote Inventory...")
 
