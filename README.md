@@ -39,14 +39,9 @@ pip install -e .
 
 ## How to use?
 
-### 1.
-Edit the `wallets.py` file with your wallet names.
-
-### 2.
-
 In your terminal, use this command to run the script:
 ```sh
-python src/delete-remote-gpu.py
+python src/delete-remote-gpu.py --hotkey-path ~/.bittensor/wallets/COLDKEY_NAME/hotkeys/HOTKEY_NAME --miner-api-url http://x.x.x.x:32000
 ```
 
 It will display all your miner GPUs known by the Chutes validator in a rich table.
