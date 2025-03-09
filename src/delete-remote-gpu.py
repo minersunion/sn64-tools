@@ -3,6 +3,7 @@ import datetime
 import hashlib
 import json
 import time
+import argparse
 from typing import Any, Dict, TypedDict
 
 import aiohttp
@@ -50,7 +51,7 @@ class RemoteInventoryItem(TypedDict):
     inst_verified_at: str
 
 
-def scorch_remote(miner_wallet: Wallet):  # type: ignore
+def scorch_remote(miner_wallet: Wallet, auto_delete: int):  # type: ignore
     remote_inventory: list[RemoteInventoryItem] = fetch_remote_inventory(miner_wallet)
     hotkey_path = get_miner_wallet_hotkey_path(miner_wallet)
     validator_api = CHUTES_API
@@ -71,14 +72,18 @@ def scorch_remote(miner_wallet: Wallet):  # type: ignore
 
         print("⚠️ CAUTION, it'll remove the gpu from the remote inventory.\n")
 
-        selected_gpus = prompt_user_input(remote_inventory, ip_to_gpus)
+        if auto_delete:
+            selected_gpus = [inventory for inventory in remote_inventory if inventory['chute'] is None and inventory['chute_id'] is None]
+            display_gpu_table(selected_gpus, miner_wallet, title="Selected GPUs for Deletion")
+        else:
+            selected_gpus = prompt_user_input(remote_inventory, ip_to_gpus)
+            display_gpu_table(selected_gpus, miner_wallet, title="Selected GPUs for Deletion")
+
+            # Display confirmation table before deletion
+            input("🚨 Press Enter to confirm deletion...")
+
         if not selected_gpus:
             return
-
-        # Display confirmation table before deletion
-        display_gpu_table(selected_gpus, miner_wallet, title="Selected GPUs for Deletion")
-
-        input("🚨 Press Enter to confirm deletion...")
 
         async with aiohttp.ClientSession(raise_for_status=True) as session:
             for gpu in selected_gpus:
@@ -338,12 +343,21 @@ def display_gpu_table(remote_inventory: list[RemoteInventoryItem], miner_wallet:
     console.print(server_table)
     console.print()
 
+def get_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-a', '--auto', help="Delete gpu_id automatically.Default: False.", default=0)
+    args = parser.parse_args()
+    return args
+
 
 if __name__ == "__main__":
+    args: argparse.Namespace = get_cli_args()
+    auto_delete: int = args.auto
+
     print("☠️ Scorch Remote Inventory...")
 
     wallet: Wallet = get_miner_wallet()  # type: ignore
     if not wallet:
         raise ValueError("Failed to get miner wallet")
 
-    scorch_remote(miner_wallet=wallet)
+    scorch_remote(miner_wallet=wallet, auto_delete=auto_delete)
