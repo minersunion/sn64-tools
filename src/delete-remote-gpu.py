@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import datetime
 import hashlib
@@ -7,13 +8,10 @@ import argparse
 from typing import Any, Dict, TypedDict
 
 import aiohttp
-from bittensor_wallet.wallet import Wallet
 from rich import box
 from rich.console import Console
 from rich.table import Table
 from substrateinterface import Keypair
-
-from wallets import get_miner_wallet, get_miner_wallet_hotkey_path
 
 VALIDATOR_HEADER = "X-Chutes-Validator"
 MINER_HEADER = "X-Chutes-Miner"
@@ -51,9 +49,78 @@ class RemoteInventoryItem(TypedDict):
     inst_verified_at: str
 
 
-def scorch_remote(miner_wallet: Wallet, auto_delete: bool):  # type: ignore
-    remote_inventory: list[RemoteInventoryItem] = fetch_remote_inventory(miner_wallet)
-    hotkey_path = get_miner_wallet_hotkey_path(miner_wallet)
+class LocalInventoryItem(TypedDict):
+    server_id: str
+    validator: str
+    ip_address: str
+    status: str
+    labels: dict[str, str]
+    cpu_per_gpu: int
+    hourly_cost: float
+    name: str
+    verification_port: int
+    created_at: str
+    seed: int
+    gpu_count: int
+    memory_per_gpu: int
+    locked: bool
+    deployments: list[dict[str, Any]]
+    gpus: list[dict[str, Any]]
+
+
+async def fetch_remote_inventory(hotkey_path: str) -> list[RemoteInventoryItem]:
+    validator_api = CHUTES_API
+    async with aiohttp.ClientSession(raise_for_status=True) as session:
+        headers, _ = sign_request(hotkey_path, purpose="miner", remote=True)
+        inventory = []
+        gpu_map = {}
+        async with session.get(f"{validator_api}/miner/nodes/", headers=headers) as resp:
+            async for content_enc in resp.content:
+                content = content_enc.decode()
+                if content.startswith("data: "):
+                    inventory.append(json.loads(content[6:]))
+                    gpu_map[inventory[-1]["uuid"]] = inventory[-1]
+                    gpu_map[inventory[-1]["uuid"]].update(
+                        {
+                            "chute": None,
+                            "chute_id": None,
+                            "inst_verification_error": None,
+                            "inst_verified_at": None,
+                        }
+                    )
+        async with session.get(f"{validator_api}/miner/inventory", headers=headers) as resp:
+            for item in await resp.json():
+                if item["gpu_id"] in gpu_map:
+                    gpu_map[item["gpu_id"]].update(
+                        {
+                            "chute": item["chute_name"],
+                            "chute_id": item["chute_id"],
+                            "inst_verification_error": item["verification_error"],
+                            "inst_verified_at": item["last_verified_at"],
+                        }
+                    )
+        inventory = sorted(inventory, key=lambda o: o["created_at"])
+        return inventory
+
+
+async def fetch_local_inventory(hotkey_path: str, miner_api_url: str) -> list[LocalInventoryItem]:
+    async with aiohttp.ClientSession(raise_for_status=True) as session:
+        headers, _ = sign_request(hotkey_path, purpose="management")
+        async with session.get(f"{miner_api_url.rstrip('/')}/servers/", headers=headers, timeout=30) as resp:
+            inventory: list[LocalInventoryItem] = await resp.json()
+            return inventory
+
+
+def fetch_local_and_remote_inventories(hotkey_path: str, miner_api_url: str):
+    async def _fetch_data_async(hotkey_path: str, miner_api_url: str) -> tuple[list[RemoteInventoryItem], list[LocalInventoryItem]]:
+        return await asyncio.gather(fetch_remote_inventory(hotkey_path), fetch_local_inventory(hotkey_path, miner_api_url))
+
+    return asyncio.run(_fetch_data_async(hotkey_path, miner_api_url))
+
+
+def scorch_remote(hotkey_path: str, miner_api_url: str, auto_delete: bool):
+    remote_inventory, local_inventory = fetch_local_and_remote_inventories(hotkey_path, miner_api_url)
+
     validator_api = CHUTES_API
 
     async def _scorch_remote():
@@ -68,16 +135,19 @@ def scorch_remote(miner_wallet: Wallet, auto_delete: bool):  # type: ignore
             ip_to_gpus[gpu_ip].append(gpu)
 
         # Display remote inventory so user can choose what to delete
-        display_gpu_table(remote_inventory, miner_wallet, title="Remote Inventory")
+        display_gpu_table(remote_inventory, title=f"Remote Inventory for {hotkey_path}")
+
+        orphaned_remote_gpus = find_orphan_remote_gpus(local_inventory, remote_inventory)
+        print(f"🔍 Found {len(orphaned_remote_gpus)} orphaned GPUs when comparing your local and remote inventories.\n")
 
         print("⚠️ CAUTION, it'll remove the gpu from the remote inventory.\n")
 
         if auto_delete:
-            selected_gpus = [inventory for inventory in remote_inventory if inventory['chute'] is None and inventory['chute_id'] is None]
-            display_gpu_table(selected_gpus, miner_wallet, title="Selected GPUs for Deletion")
+            selected_gpus = [inventory for inventory in orphaned_remote_gpus if inventory['chute'] is None and inventory['chute_id'] is None]
+            display_gpu_table(selected_gpus, title=f"Selected GPUs for Deletion for {hotkey_path}")
         else:
             selected_gpus = prompt_user_input(remote_inventory, ip_to_gpus)
-            display_gpu_table(selected_gpus, miner_wallet, title="Selected GPUs for Deletion")
+            display_gpu_table(selected_gpus, title=f"Selected GPUs for Deletion for {hotkey_path}")
 
             # Display confirmation table before deletion
             input("🚨 Press Enter to confirm deletion...")
@@ -226,109 +296,34 @@ def format_verification(error, verified_at):
     return "[yellow]Pending[/yellow]"
 
 
-def display_remote_inventory(inventory):
+def find_orphan_remote_gpus(local_inventory: list[LocalInventoryItem], remote_inventory: list[RemoteInventoryItem]) -> list[RemoteInventoryItem]:
     """
-    Render remote/validator inventory.
+    Find orphaned remote GPUs that are not present in the local inventory but are still stuck in the remote inventory.
+    This means that the Chutes validator thinks we still have those GPUs but we don't have them in our local inventory.
     """
-    console = Console()
-    table = Table(title="GPU Information")
-    table.add_column("Name", style="cyan")
-    table.add_column("Chute", style="cyan")
-    table.add_column("Memory (GB)", justify="right", style="green")
-    table.add_column("Clock (MHz)", justify="right", style="red")
-    table.add_column("Created At", style="blue")
-    table.add_column("GPU Verification", style="white")
-    table.add_column("Instance verification", style="white")
-    for gpu in inventory:
-        table.add_row(
-            gpu["name"],
-            f"{gpu['chute_id']} {gpu['chute']}",
-            format_memory(gpu["memory"]),
-            f"{gpu['clock_rate'] / 1000:.0f}",
-            format_date(gpu["created_at"]),
-            format_verification(gpu["verification_error"], gpu["verified_at"]),
-            format_verification(gpu["inst_verification_error"], gpu["inst_verified_at"]),
-        )
-    console.print(table)
-    console.print("\n" + "=" * 80 + "\n")
+    local_gpu_ids = set()
+    remote_gpu_ids = set()
+
+    orphaned_remote_gpus: list[RemoteInventoryItem] = []
+
+    for server in local_inventory:
+        for local_gpu in server["gpus"]:
+            local_gpu_ids.add(local_gpu["gpu_id"])
+
+    for remote_gpu in remote_inventory:
+        remote_gpu_ids.add(remote_gpu["uuid"])
+
+    stuck_ids = remote_gpu_ids - local_gpu_ids
+
+    orphaned_remote_gpus = [gpu for gpu in remote_inventory if gpu["uuid"] in stuck_ids]
+
+    return orphaned_remote_gpus
 
 
-def fetch_remote_inventory(miner_wallet: Wallet) -> list[RemoteInventoryItem]:  # type: ignore
-    """
-    GET remote inventory for hotkey (i.e., what the validator has tracked) inventory.
-    [
-        {
-            "uuid": "bbf86277cb61e748ef875baa27b5f0ed",
-            "name": "NVIDIA L40S",
-            "memory": 47697362944,
-            "major": 8,
-            "minor": 9,
-            "processors": 142,
-            "sxm": false,
-            "clock_rate": 2520000.0,
-            "max_threads_per_processor": 1536,
-            "concurrent_kernels": true,
-            "ecc": true,
-            "seed": 9095026960248786810,
-            "miner_hotkey": "hotkey-ss58",
-            "gpu_identifier": "l40s",
-            "device_index": 0,
-            "created_at": "2025-01-31T07:56:59.673308+00:00",
-            "verification_host": "160.202.129.197",
-            "verification_port": 31285,
-            "verification_error": null,
-            "verified_at": "2025-01-31T07:57:07.657239+00:00",
-            "chute": "Qwen/Qwen2.5-72B-Instruct",
-            "chute_id": "62cc0462-8983-5ef1-8859-92ccf726e235",
-            "inst_verification_error": null,
-            "inst_verified_at": "2025-02-01T17:50:36.081287+00:00"
-        }
-    ]
-    """
-    hotkey_path = get_miner_wallet_hotkey_path(miner_wallet)
-    validator_api = CHUTES_API
-
-    async def _remote_inventory():
-        nonlocal hotkey_path, validator_api
-        async with aiohttp.ClientSession(raise_for_status=True) as session:
-            headers, _ = sign_request(hotkey_path, purpose="miner", remote=True)
-            inventory = []
-            gpu_map = {}
-            async with session.get(f"{validator_api}/miner/nodes/", headers=headers) as resp:
-                async for content_enc in resp.content:
-                    content = content_enc.decode()
-                    if content.startswith("data: "):
-                        inventory.append(json.loads(content[6:]))
-                        gpu_map[inventory[-1]["uuid"]] = inventory[-1]
-                        gpu_map[inventory[-1]["uuid"]].update(
-                            {
-                                "chute": None,
-                                "chute_id": None,
-                                "inst_verification_error": None,
-                                "inst_verified_at": None,
-                            }
-                        )
-            async with session.get(f"{validator_api}/miner/inventory", headers=headers) as resp:
-                for item in await resp.json():
-                    if item["gpu_id"] in gpu_map:
-                        gpu_map[item["gpu_id"]].update(
-                            {
-                                "chute": item["chute_name"],
-                                "chute_id": item["chute_id"],
-                                "inst_verification_error": item["verification_error"],
-                                "inst_verified_at": item["last_verified_at"],
-                            }
-                        )
-            inventory = sorted(inventory, key=lambda o: o["created_at"])
-            return inventory
-
-    return asyncio.run(_remote_inventory())
-
-
-def display_gpu_table(remote_inventory: list[RemoteInventoryItem], miner_wallet: Wallet, title="Remote Inventory"):  # type: ignore
+def display_gpu_table(remote_inventory: list[RemoteInventoryItem], title="Remote Inventory"):
     console = Console()
 
-    server_table = Table(title=f"{title}: {miner_wallet}", box=box.ROUNDED)
+    server_table = Table(title=f"{title}", box=box.ROUNDED)
 
     server_table.add_column("#", style="white")
     server_table.add_column("GPU Name", style="blue")
@@ -350,14 +345,24 @@ def get_cli_args() -> argparse.Namespace:
     return args
 
 
-if __name__ == "__main__":
-    args: argparse.Namespace = get_cli_args()
-    auto_delete: bool = args.auto_delete
+def get_cli_args():
+    parser = argparse.ArgumentParser(description="Scorch remote inventory")
+    parser.add_argument("--hotkey-path", type=str, required=True, help="Path to hotkey ~/.bittensor/wallets/wallet.name/hotkeys/wallet.hotkey_str")
+    parser.add_argument("--miner-api-url", type=str, required=True, help="Miner API URL")
+    parser.add_argument("--auto-delete", action="store_true", help="Delete gpu_id automatically")
+    return parser.parse_args()
 
+
+if __name__ == "__main__":
     print("☠️ Scorch Remote Inventory...")
 
-    wallet: Wallet = get_miner_wallet()  # type: ignore
-    if not wallet:
-        raise ValueError("Failed to get miner wallet")
+    args = get_cli_args()
 
-    scorch_remote(miner_wallet=wallet, auto_delete=auto_delete)
+    hotkey_path = args.hotkey_path
+    miner_api_url = args.miner_api_url
+    auto_delete = args.auto_delete
+
+    if not hotkey_path or not miner_api_url:
+        raise ValueError("Invalid CLI arguments")
+
+    scorch_remote(hotkey_path, miner_api_url, auto_delete)
