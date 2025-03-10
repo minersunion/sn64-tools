@@ -338,12 +338,6 @@ def display_gpu_table(remote_inventory: list[RemoteInventoryItem], title="Remote
     console.print(server_table)
     console.print()
 
-def get_cli_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-a', '--auto-delete', action='store_true', help="Delete gpu_id automatically.")
-    args = parser.parse_args()
-    return args
-
 
 def get_cli_args():
     parser = argparse.ArgumentParser(description="Scorch remote inventory")
