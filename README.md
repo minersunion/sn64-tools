@@ -44,6 +44,12 @@ In your terminal, use this command to run the script:
 python src/delete-remote-gpu.py --hotkey-path ~/.bittensor/wallets/COLDKEY_NAME/hotkeys/HOTKEY_NAME --miner-api-url http://x.x.x.x:32000
 ```
 
+### 3.
+If you want to delete gpus automatically, use this command to run the script:
+```sh
+while true;do python src/delete-remote-gpu.py -a;sleep 3600;done
+```
+
 It will display all your miner GPUs known by the Chutes validator in a rich table.
 And then it will prompt you for GPU index numbers or IPs to delete from the validator.
 

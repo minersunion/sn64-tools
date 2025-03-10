@@ -117,7 +117,7 @@ def fetch_local_and_remote_inventories(hotkey_path: str, miner_api_url: str):
     return asyncio.run(_fetch_data_async(hotkey_path, miner_api_url))
 
 
-def scorch_remote(hotkey_path: str, miner_api_url: str):
+def scorch_remote(hotkey_path: str, miner_api_url: str, auto_delete: bool):
     remote_inventory, local_inventory = fetch_local_and_remote_inventories(hotkey_path, miner_api_url)
 
     validator_api = CHUTES_API
@@ -141,14 +141,18 @@ def scorch_remote(hotkey_path: str, miner_api_url: str):
 
         print("⚠️ CAUTION, it'll remove the gpu from the remote inventory.\n")
 
-        selected_gpus = prompt_user_input(remote_inventory, ip_to_gpus)
+        if auto_delete:
+            selected_gpus = [inventory for inventory in orphaned_remote_gpus if inventory['chute'] is None and inventory['chute_id'] is None]
+            display_gpu_table(selected_gpus, title=f"Selected GPUs for Deletion for {hotkey_path}")
+        else:
+            selected_gpus = prompt_user_input(remote_inventory, ip_to_gpus)
+            display_gpu_table(selected_gpus, title=f"Selected GPUs for Deletion for {hotkey_path}")
+
+            # Display confirmation table before deletion
+            input("🚨 Press Enter to confirm deletion...")
+
         if not selected_gpus:
             return
-
-        # Display confirmation table before deletion
-        display_gpu_table(selected_gpus, title=f"Selected GPUs for Deletion for {hotkey_path}")
-
-        input("🚨 Press Enter to confirm deletion...")
 
         async with aiohttp.ClientSession(raise_for_status=True) as session:
             for gpu in selected_gpus:
@@ -338,6 +342,7 @@ def get_cli_args():
     parser = argparse.ArgumentParser(description="Scorch remote inventory")
     parser.add_argument("--hotkey-path", type=str, required=True, help="Path to hotkey ~/.bittensor/wallets/wallet.name/hotkeys/wallet.hotkey_str")
     parser.add_argument("--miner-api-url", type=str, required=True, help="Miner API URL")
+    parser.add_argument("--auto-delete", action="store_true", help="Delete gpu_id automatically")
     return parser.parse_args()
 
 
@@ -348,8 +353,9 @@ if __name__ == "__main__":
 
     hotkey_path = args.hotkey_path
     miner_api_url = args.miner_api_url
+    auto_delete = args.auto_delete
 
     if not hotkey_path or not miner_api_url:
         raise ValueError("Invalid CLI arguments")
 
-    scorch_remote(hotkey_path, miner_api_url)
+    scorch_remote(hotkey_path, miner_api_url, auto_delete)
