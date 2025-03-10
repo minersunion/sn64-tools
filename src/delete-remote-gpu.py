@@ -4,7 +4,6 @@ import datetime
 import hashlib
 import json
 import time
-import argparse
 from typing import Any, Dict, TypedDict
 
 import aiohttp
